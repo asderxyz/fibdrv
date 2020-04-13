@@ -23,8 +23,9 @@ static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
+static int fib_algo_selection;
 
-static long long fib_sequence(long long k)
+static long long fib_sequence_fast_dobuling(long long k)
 {
     long long a = 0, b = 1;
 
@@ -50,12 +51,32 @@ static long long fib_sequence(long long k)
     return a;
 }
 
+static long long fib_sequence_orig(long long k)
+{
+    /* FIXME: use clz/ctz and fast algorithms to speed up */
+    long long f[k + 2];
+
+    f[0] = 0;
+    f[1] = 1;
+
+    for (int i = 2; i <= k; i++) {
+        f[i] = f[i - 1] + f[i - 2];
+    }
+
+    return f[k];
+}
+
+static long long (*fib_seq_func[])(long long) = {
+    fib_sequence_orig,
+    fib_sequence_fast_dobuling,
+};
+
 static ktime_t kt[MAX_LENGTH + 1];
 
 static inline long long fib_time_proxy(long long k)
 {
     kt[k] = ktime_get();
-    long long result = fib_sequence(k);
+    long long result = fib_seq_func[fib_algo_selection](k);
     kt[k] = ktime_sub(ktime_get(), kt[k]);
 
     return result;
