@@ -50,6 +50,18 @@ static long long fib_sequence(long long k)
     return a;
 }
 
+static ktime_t kt[MAX_LENGTH + 1];
+
+static inline long long fib_time_proxy(long long k)
+{
+    kt[k] = ktime_get();
+    long long result = fib_sequence(k);
+    kt[k] = ktime_sub(ktime_get(), kt[k]);
+
+    return result;
+}
+
+/* calculate the fibonacci number at given offset */
 static int fib_open(struct inode *inode, struct file *file)
 {
     if (!mutex_trylock(&fib_mutex)) {
@@ -65,13 +77,12 @@ static int fib_release(struct inode *inode, struct file *file)
     return 0;
 }
 
-/* calculate the fibonacci number at given offset */
 static ssize_t fib_read(struct file *file,
                         char *buf,
                         size_t size,
                         loff_t *offset)
 {
-    return (ssize_t) fib_sequence(*offset);
+    return (ssize_t) fib_time_proxy(*offset);
 }
 
 /* write operation is skipped */
@@ -113,6 +124,33 @@ const struct file_operations fib_fops = {
     .open = fib_open,
     .release = fib_release,
     .llseek = fib_device_lseek,
+};
+
+static struct kobject *fib_kobj;
+
+static ssize_t fib_time_show(struct kobject *kobj,
+                             struct kobj_attribute *attr,
+                             char *buf)
+{
+    char *str = buf;
+
+    for (int i = 0; i <= MAX_LENGTH; i++)
+        str += snprintf(str, 64, "offset %d, execution time: %lld\n", i,
+                        ktime_to_ns(kt[i]));
+
+    return str - buf;
+}
+
+static struct kobj_attribute fib_time_attr =
+    __ATTR(fib_time, 0664, fib_time_show, NULL);
+
+static struct attribute *attrs[] = {
+    &fib_time_attr.attr,
+    NULL,
+};
+
+static struct attribute_group attr_group = {
+    .attrs = attrs,
 };
 
 static int __init init_fib_dev(void)
@@ -160,6 +198,15 @@ static int __init init_fib_dev(void)
         rc = -4;
         goto failed_device_create;
     }
+
+    fib_kobj = kobject_create_and_add(DEV_FIBONACCI_NAME, kernel_kobj);
+    if (!fib_kobj)
+        return -ENOMEM;
+
+    rc = sysfs_create_group(fib_kobj, &attr_group);
+    if (rc)
+        kobject_put(fib_kobj);
+
     return rc;
 failed_device_create:
     class_destroy(fib_class);
@@ -175,6 +222,7 @@ static void __exit exit_fib_dev(void)
     mutex_destroy(&fib_mutex);
     device_destroy(fib_class, fib_dev);
     class_destroy(fib_class);
+    kobject_put(fib_kobj);
     cdev_del(fib_cdev);
     unregister_chrdev_region(fib_dev, 1);
 }
