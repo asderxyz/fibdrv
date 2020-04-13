@@ -25,6 +25,57 @@ static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
 static int fib_algo_selection;
 
+static long long multiply(long long a, long long b)
+{
+    long long remaining_b = b;
+    long long res = 0;
+
+    /*
+     * 1. Find the MSB (Most Significant Bit) position of 'b'.
+     * 2. Accumulate the result with (1 << MSB position).
+     * 3. Clear the MSB position.
+     *
+     * FIXME: Implement the negative number multiplication.
+     */
+    do {
+        int msb_pos;
+
+        msb_pos = ilog2(remaining_b);
+        res += (a << msb_pos);
+
+        /* Clear MSB */
+        remaining_b &= ~(1ULL << msb_pos);
+    } while (remaining_b);
+
+    return res;
+}
+
+static long long fib_sequence_fast_dobuling_optimized(long long k)
+{
+    int msb_pos = ilog2(k);
+    long long a = 0, b = 1;
+
+    if (!k)
+        return 0;
+
+    for (int i = msb_pos; i >= 0; i--) {
+        long long t1, t2;
+
+        t1 = multiply(a, (b << 1) - a);
+        t2 = multiply(b, b) + multiply(a, a);
+        a = t1;
+        b = t2;
+
+        if (k & (1ULL << i)) {
+            t1 = a + b;
+            a = b;
+            b = t1;
+        }
+    }
+
+    return a;
+}
+
 static long long fib_sequence_fast_dobuling(long long k)
 {
     long long a = 0, b = 1;
@@ -69,6 +120,7 @@ static long long fib_sequence_orig(long long k)
 static long long (*fib_seq_func[])(long long) = {
     fib_sequence_orig,
     fib_sequence_fast_dobuling,
+    fib_sequence_fast_dobuling_optimized,
 };
 
 static ktime_t kt[MAX_LENGTH + 1];
