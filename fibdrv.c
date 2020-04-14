@@ -19,7 +19,7 @@ MODULE_VERSION("0.1");
  */
 #define MAX_LENGTH 92
 
-#define MAX_FIB_ALGO 3
+#define MAX_FIB_ALGO 4
 
 static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
@@ -51,7 +51,7 @@ static inline long long multiply(long long a, long long b)
     return res;
 }
 
-static long long fib_sequence_fast_dobuling_optimized(long long k)
+static long long fib_sequence_fast_dobuling_clz_no_multiply(long long k)
 {
     int msb_pos = ilog2(k);
     long long a = 0, b = 1;
@@ -78,7 +78,7 @@ static long long fib_sequence_fast_dobuling_optimized(long long k)
     return a;
 }
 
-static long long fib_sequence_fast_dobuling(long long k)
+static long long fib_sequence_fast_dobuling_clz(long long k)
 {
     long long a = 0, b = 1;
 
@@ -86,6 +86,33 @@ static long long fib_sequence_fast_dobuling(long long k)
         return 0;
 
     for (int i = ilog2(k); i >= 0; i--) {
+        long long t1, t2;
+
+        t1 = a * (b * 2 - a);
+        t2 = b * b + a * a;
+
+        a = t1;
+        b = t2;
+
+        if (k & (1ULL << i)) {
+            t1 = a + b;
+            a = b;
+            b = t1;
+        }
+    }
+
+    return a;
+
+}
+
+static long long fib_sequence_fast_dobuling(long long k)
+{
+    long long a = 0, b = 1;
+
+    if (!k)
+        return 0;
+
+    for (int i = 31; i >= 0; i--) {
         long long t1, t2;
 
         t1 = a * (b * 2 - a);
@@ -122,13 +149,15 @@ static long long fib_sequence_orig(long long k)
 static long long (*fib_seq_func[])(long long) = {
     fib_sequence_orig,
     fib_sequence_fast_dobuling,
-    fib_sequence_fast_dobuling_optimized,
+    fib_sequence_fast_dobuling_clz,
+    fib_sequence_fast_dobuling_clz_no_multiply,
 };
 
 char fib_algo_str[MAX_FIB_ALGO][64] = {
     "Original Fibonacci",
     "Fast doubling Fibonacci",
-    "Fast doubling Fibonacci by eliminating multiplication",
+    "Fast doubling Fibonacci with clz",
+    "Fast doubling Fibonacci with clz + 'No multiply'",
 };
 
 static ktime_t kt[MAX_LENGTH + 1];
