@@ -19,15 +19,16 @@ MODULE_VERSION("0.1");
  */
 #define MAX_LENGTH 92
 
+#define MAX_FIB_ALGO 3
+
 static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
 static int fib_algo_selection;
 
-static long long multiply(long long a, long long b)
+static inline long long multiply(long long a, long long b)
 {
-    long long remaining_b = b;
     long long res = 0;
 
     /*
@@ -37,15 +38,15 @@ static long long multiply(long long a, long long b)
      *
      * FIXME: Implement the negative number multiplication.
      */
-    do {
+    while (b) {
         int msb_pos;
 
-        msb_pos = ilog2(remaining_b);
+        msb_pos = ilog2(b);
         res += (a << msb_pos);
 
         /* Clear MSB */
-        remaining_b &= ~(1ULL << msb_pos);
-    } while (remaining_b);
+        b &= ~(1ULL << msb_pos);
+    }
 
     return res;
 }
@@ -63,6 +64,7 @@ static long long fib_sequence_fast_dobuling_optimized(long long k)
 
         t1 = multiply(a, (b << 1) - a);
         t2 = multiply(b, b) + multiply(a, a);
+
         a = t1;
         b = t2;
 
@@ -121,6 +123,12 @@ static long long (*fib_seq_func[])(long long) = {
     fib_sequence_orig,
     fib_sequence_fast_dobuling,
     fib_sequence_fast_dobuling_optimized,
+};
+
+char fib_algo_str[MAX_FIB_ALGO][64] = {
+    "Original Fibonacci",
+    "Fast doubling Fibonacci",
+    "Fast doubling Fibonacci by eliminating multiplication",
 };
 
 static ktime_t kt[MAX_LENGTH + 1];
@@ -208,17 +216,47 @@ static ssize_t fib_time_show(struct kobject *kobj,
     char *str = buf;
 
     for (int i = 0; i <= MAX_LENGTH; i++)
-        str += snprintf(str, 64, "offset %d, execution time: %lld\n", i,
+        str += snprintf(str, 80, "offset %d, execution time: %lld\n", i,
                         ktime_to_ns(kt[i]));
 
     return str - buf;
 }
 
+static ssize_t fib_algo_show(struct kobject *kobj,
+                             struct kobj_attribute *attr,
+                             char *buf)
+{
+    return snprintf(buf, 80, "%d <%s>\n", fib_algo_selection,
+                    fib_algo_str[fib_algo_selection]);
+}
+
+static ssize_t fib_algo_store(struct kobject *kobj,
+                              struct kobj_attribute *attr,
+                              const char *buf,
+                              size_t count)
+{
+    int var, ret;
+
+    ret = kstrtoint(buf, 10, &var);
+    if (ret < 0)
+        return ret;
+
+    if (var < 0 || var >= MAX_FIB_ALGO)
+        return -EINVAL;
+
+    fib_algo_selection = var;
+
+    return count;
+}
+
 static struct kobj_attribute fib_time_attr =
     __ATTR(fib_time, 0664, fib_time_show, NULL);
+static struct kobj_attribute fib_algo_attr =
+    __ATTR(fib_algo, 0664, fib_algo_show, fib_algo_store);
 
 static struct attribute *attrs[] = {
     &fib_time_attr.attr,
+    &fib_algo_attr.attr,
     NULL,
 };
 
