@@ -53,13 +53,12 @@ static inline long long multiply(long long a, long long b)
 
 static long long fib_sequence_fast_doubling_clz_no_multiply(long long k)
 {
-    int msb_pos = ilog2(k);
     long long a = 0, b = 1;
 
     if (!k)
         return 0;
 
-    for (int i = msb_pos; i >= 0; i--) {
+    for (int i = ilog2(k); i >= 0; i--) {
         long long t1, t2;
 
         t1 = multiply(a, (b << 1) - a);
