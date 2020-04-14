@@ -51,7 +51,7 @@ static inline long long multiply(long long a, long long b)
     return res;
 }
 
-static long long fib_sequence_fast_dobuling_clz_no_multiply(long long k)
+static long long fib_sequence_fast_doubling_clz_no_multiply(long long k)
 {
     int msb_pos = ilog2(k);
     long long a = 0, b = 1;
@@ -78,7 +78,7 @@ static long long fib_sequence_fast_dobuling_clz_no_multiply(long long k)
     return a;
 }
 
-static long long fib_sequence_fast_dobuling_clz(long long k)
+static long long fib_sequence_fast_doubling_clz(long long k)
 {
     long long a = 0, b = 1;
 
@@ -105,7 +105,7 @@ static long long fib_sequence_fast_dobuling_clz(long long k)
 
 }
 
-static long long fib_sequence_fast_dobuling(long long k)
+static long long fib_sequence_fast_doubling(long long k)
 {
     long long a = 0, b = 1;
 
@@ -148,9 +148,9 @@ static long long fib_sequence_orig(long long k)
 
 static long long (*fib_seq_func[])(long long) = {
     fib_sequence_orig,
-    fib_sequence_fast_dobuling,
-    fib_sequence_fast_dobuling_clz,
-    fib_sequence_fast_dobuling_clz_no_multiply,
+    fib_sequence_fast_doubling,
+    fib_sequence_fast_doubling_clz,
+    fib_sequence_fast_doubling_clz_no_multiply,
 };
 
 char fib_algo_str[MAX_FIB_ALGO][64] = {
