@@ -12,9 +12,9 @@ int main()
 {
     long long sz;
 
-    char buf[1];
+    char buf[256];
     char write_buf[] = "testing writing";
-    int offset = 92; /* TODO: try test something bigger than the limit */
+    int offset = 100; /* TODO: try test something bigger than the limit */
     struct timespec tt1, tt2;
 
     int fd = open(FIB_DEV, O_RDWR);
@@ -31,12 +31,13 @@ int main()
     for (int i = 0; i <= offset; i++) {
         lseek(fd, i, SEEK_SET);
         clock_gettime(CLOCK_REALTIME, &tt1);
-        sz = read(fd, buf, 1);
+        sz = read(fd, buf, sizeof(buf));
+        buf[sz] = 0;
         clock_gettime(CLOCK_REALTIME, &tt2);
         printf("Reading from " FIB_DEV
                " at offset %d, returned the sequence "
-               "%lld. Execution time: %ld ns\n",
-               i, sz, tt2.tv_nsec - tt1.tv_nsec);
+               "%s. Execution time: %ld ns\n",
+               i, buf, tt2.tv_nsec - tt1.tv_nsec);
     }
 
 #if 0
