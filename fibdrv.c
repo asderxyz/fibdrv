@@ -6,6 +6,8 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/slab.h>
+#include <linux/uaccess.h>
 
 MODULE_LICENSE("Dual MIT/GPL");
 MODULE_AUTHOR("National Cheng Kung University, Taiwan");
@@ -17,15 +19,95 @@ MODULE_VERSION("0.1");
 /* MAX_LENGTH is set to 92 because
  * ssize_t can't fit the number > 92
  */
-#define MAX_LENGTH 92
+#define MAX_LENGTH 100
 
 #define MAX_FIB_ALGO 4
 
+/******************************************************************************/
+#define MAX_STR_LEN_BITS (54)
+#define MAX_STR_LEN ((1UL << MAX_STR_LEN_BITS) - 1)
+#define LARGE_STRING_LEN 256
+
+#define xs_literal_empty() \
+    (xs) { .space_left = 15 }
+
+#define xs_tmp(x) xs_new(&xs_literal_empty(), x)
+
+typedef union {
+    char data[16];
+
+    struct {
+        uint8_t filler[15],
+        space_left : 4,
+        is_ptr : 1, is_large_string : 1, flag2 : 1, flag3 : 1;
+    };
+
+    struct {
+        char *ptr;
+        size_t size : MAX_STR_LEN_BITS,
+               capacity : 6;
+    };
+} xs;
+
+static inline bool xs_is_ptr(const xs *x)
+{
+    return x->is_ptr;
+}
+
+static inline bool xs_is_large_string(const xs *x)
+{
+    return x->is_large_string;
+}
+
+static inline size_t xs_size(const xs *x)
+{
+    return xs_is_ptr(x) ? x->size : 15 - x->space_left;
+}
+
+static inline char *xs_data(const xs *x)
+{
+    if (!xs_is_ptr(x))
+        return (char *) x->data;
+
+    if (xs_is_large_string(x))
+        return (char *) (x->ptr + 4);
+
+    return (char *)x->ptr;
+}
+
+static inline void xs_set_ref_count(const xs *x, int val)
+{
+    *((int *)((size_t)x->ptr)) = val;
+}
+
+static inline int xs_dec_ref_count(const xs *x)
+{
+    if (!xs_is_large_string(x))
+        return 0;
+    return --(*(int *)((size_t)x->ptr));
+}
+
+static inline xs *xs_newempty(xs *x)
+{
+    *x = xs_literal_empty();
+    return x;
+}
+
+static inline xs *xs_free(xs *x)
+{
+    if (xs_is_ptr(x) && xs_dec_ref_count(x) <= 0)
+        kfree(x->ptr);
+    return xs_newempty(x);
+}
+
+xs *xs_new(xs *x, const void *p);
+/******************************************************************************/
 static dev_t fib_dev = 0;
 static struct cdev *fib_cdev;
 static struct class *fib_class;
 static DEFINE_MUTEX(fib_mutex);
 static int fib_algo_selection;
+static void string_number_add(xs *a, xs *b, xs *out);
 
 static inline long long multiply(long long a, long long b)
 {
@@ -51,7 +133,7 @@ static inline long long multiply(long long a, long long b)
     return res;
 }
 
-static long long fib_sequence_fast_doubling_clz_no_multiply(long long k)
+static long long fib_sequence_fast_doubling_clz_no_multiply(long long k, char *buf)
 {
     long long a = 0, b = 1;
 
@@ -77,7 +159,7 @@ static long long fib_sequence_fast_doubling_clz_no_multiply(long long k)
     return a;
 }
 
-static long long fib_sequence_fast_doubling_clz(long long k)
+static long long fib_sequence_fast_doubling_clz(long long k, char *buf)
 {
     long long a = 0, b = 1;
 
@@ -104,7 +186,7 @@ static long long fib_sequence_fast_doubling_clz(long long k)
 
 }
 
-static long long fib_sequence_fast_doubling(long long k)
+static long long fib_sequence_fast_doubling(long long k, char *buf)
 {
     long long a = 0, b = 1;
 
@@ -130,9 +212,27 @@ static long long fib_sequence_fast_doubling(long long k)
     return a;
 }
 
-static long long fib_sequence_orig(long long k)
+static long long fib_sequence_orig(long long k, char *buf)
 {
     /* FIXME: use clz/ctz and fast algorithms to speed up */
+    xs f[k + 2];
+    int i, n;
+
+    f[0] = *xs_tmp("0");
+    f[1] = *xs_tmp("1");
+
+    for (i = 2; i <= k; i++)
+        string_number_add(&f[i - 1], &f[i - 2], &f[i]);
+
+    n = xs_size(&f[k]);
+    if (copy_to_user(buf, xs_data(&f[k]), n))
+            return -EFAULT;
+
+    for (i = 0; i <= k; i++)
+        xs_free(&f[i]);
+
+    return n;
+    /*
     long long f[k + 2];
 
     f[0] = 0;
@@ -143,9 +243,10 @@ static long long fib_sequence_orig(long long k)
     }
 
     return f[k];
+    */
 }
 
-static long long (*fib_seq_func[])(long long) = {
+static long long (*fib_seq_func[])(long long, char *) = {
     fib_sequence_orig,
     fib_sequence_fast_doubling,
     fib_sequence_fast_doubling_clz,
@@ -161,10 +262,10 @@ char fib_algo_str[MAX_FIB_ALGO][64] = {
 
 static ktime_t kt[MAX_LENGTH + 1];
 
-static inline long long fib_time_proxy(long long k)
+static inline long long fib_time_proxy(long long k, char *buf)
 {
     kt[k] = ktime_get();
-    long long result = fib_seq_func[fib_algo_selection](k);
+    long long result = fib_seq_func[fib_algo_selection](k, buf);
     kt[k] = ktime_sub(ktime_get(), kt[k]);
 
     return result;
@@ -191,7 +292,7 @@ static ssize_t fib_read(struct file *file,
                         size_t size,
                         loff_t *offset)
 {
-    return (ssize_t) fib_time_proxy(*offset);
+    return (ssize_t) fib_time_proxy(*offset, buf);
 }
 
 /* write operation is skipped */
@@ -368,3 +469,131 @@ static void __exit exit_fib_dev(void)
 
 module_init(init_fib_dev);
 module_exit(exit_fib_dev);
+
+/******************************************************************************/
+#define SWAP(a, b, type) \
+    do {                 \
+        type *__c = (a); \
+        type *__d = (b); \
+        *__c ^= *__d;    \
+        *__d ^= *__c;    \
+        *__c ^= *__d;    \
+    } while(0)
+
+static void _swap(void *a, void *b, size_t size) 
+{
+    if (a == b)
+        return;
+
+    switch (size) 
+    {
+        case 1:
+            SWAP(a, b, char);
+            break;
+        case 2:
+            SWAP(a, b, short);
+            break;
+        case 4:
+            SWAP(a, b, unsigned int);
+            break;
+        case 8:
+            SWAP(a, b, unsigned long);
+            break;
+        default:
+            break;
+    }
+}
+
+static void reverse_str(char *str, size_t n)
+{
+    for (int i = 0; i < (n >> 1); i++)
+        _swap(&str[i], &str[n - i - 1], sizeof(char));
+}
+
+static void xs_allocate_data(xs *x, size_t len, bool reallocate)
+{
+    size_t n = 1 << x->capacity;
+    if (len < LARGE_STRING_LEN) {
+        x->ptr = reallocate ? krealloc(x->ptr, n, GFP_KERNEL)
+            : kmalloc(n, GFP_KERNEL);
+    return;
+    }
+
+    x->is_large_string = 1;
+    x->ptr = reallocate ? krealloc(x->ptr, n + 4, GFP_KERNEL)
+        : kmalloc(n + 4, GFP_KERNEL);
+    xs_set_ref_count(x, 1);
+}
+
+xs *xs_new(xs *x, const void *p)
+{
+    *x = xs_literal_empty();
+    //value from strlen() returned do not include terminate null character.
+    //len is include terminating null character.
+    size_t len = strlen(p) + 1;
+    if (len > 16) {
+        x->capacity = ilog2(len) + 1;
+        //x->size is not include terminating null character.
+        x->size = len - 1;
+        x->is_ptr = true;
+        xs_allocate_data(x, x->size, 0);
+        memcpy(xs_data(x), p, len);
+    } else {
+        memcpy(x->data, p, len);
+        x->space_left = 15 - (len - 1);
+    }
+    return x;
+}
+
+/******************************************************************************/
+static void string_number_add(xs *a, xs *b, xs *out)
+{
+    char *data_a, *data_b;
+    size_t size_a, size_b;
+    int i, carry = 0;
+    int sum;
+
+    if (xs_size(a) < xs_size(b)) {
+        xs *p = a;
+        a = b;
+        b = p;
+        //_swap((void *)&a, (void *)&b, sizeof(void *));
+    }
+
+    data_a = xs_data(a);
+    data_b = xs_data(b);
+
+    size_a = xs_size(a);
+    size_b = xs_size(b);
+
+    reverse_str(data_a, size_a);
+    reverse_str(data_b, size_b);
+    
+    //here has size problem to cause segemtn fault.
+    char buf[size_a + 2];
+
+    for (i = 0; i < size_b; i++) {
+        sum = (data_a[i] - '0') + (data_b[i] - '0') + carry;
+        buf[i] = '0' + sum % 10;
+        carry = sum / 10;
+    }
+
+    for (i = size_b; i < size_a; i++) {
+        sum = (data_a[i] - '0') + carry;
+        buf[i] = '0' + sum % 10;
+        carry = sum / 10;
+    }
+
+    if (carry)
+        buf[i++] = '0' + carry;
+
+    buf[i] = 0;
+
+    reverse_str(buf, i);
+
+    reverse_str(data_a, size_a);
+    reverse_str(data_b, size_b);
+
+    if (out)
+        *out = *xs_tmp(buf);
+}
