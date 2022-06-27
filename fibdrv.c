@@ -569,7 +569,6 @@ static void string_number_add(xs *a, xs *b, xs *out)
     reverse_str(data_a, size_a);
     reverse_str(data_b, size_b);
     
-    //here has size problem to cause segemtn fault.
     char buf[size_a + 2];
 
     for (i = 0; i < size_b; i++) {
